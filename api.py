@@ -31,6 +31,7 @@ class DetectRequest(BaseModel):
     prompt: str = Field(..., max_length=2000)
     response: str = Field(..., max_length=5000)
     model_id: Optional[str] = Field("llama-3-8b")
+    sampled_responses: Optional[List[str]] = None
 
 
 class Span(BaseModel):
@@ -44,6 +45,7 @@ class DetectResponse(BaseModel):
     hallucination_score: float
     is_hallucinated: bool
     explanation: str
+    hallucination_pattern: Optional[str]
     flagged_spans: List[Span]
     component_scores: Dict[str, float]
 
@@ -65,12 +67,13 @@ async def health_check():
 @limiter.limit("50/minute")
 async def detect_hallucination(request: Request, payload: DetectRequest):
     try:
-        result = run_pipeline(payload.prompt, payload.response)
+        result = run_pipeline(payload.prompt, payload.response, payload.sampled_responses)
 
         return DetectResponse(
             hallucination_score=result["score"],
             is_hallucinated=result["label"],
             explanation=result["explanation"],
+            hallucination_pattern=result["pattern"],
             flagged_spans=[
                 Span(
                     start=s["start"],

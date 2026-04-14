@@ -1,16 +1,32 @@
+import asyncio
+import hashlib
+import time
+from typing import Dict, List, Optional
+
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded  # type: ignore
+from slowapi.util import get_remote_address
 
 # 🔥 Import pipeline
-from pipeline import run_pipeline
+from pipeline import run_pipeline_async
 
 # =========================
-# ⚙️ Setup
+# ⚙️ Setup & Metrics
 # =========================
+
+UPTIME_START = time.time()
+
+_metrics = {
+    "total": 0,
+    "hits": 0,
+    "latencies": [],
+    "hallucinated": 0
+}
+
+_cache = {}
+MAX_CACHE_SIZE = 500
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -48,16 +64,36 @@ class DetectResponse(BaseModel):
     hallucination_pattern: Optional[str]
     flagged_spans: List[Span]
     component_scores: Dict[str, float]
-
+    cache_hit: bool
 
 # =========================
-# 🟢 Health Check
+# 🟢 Health Check & Metrics
 # =========================
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
 
+@app.get("/metrics")
+async def get_metrics():
+    hits = _metrics["hits"]
+    total = _metrics["total"]
+    cache_hit_rate = (hits / total) if total > 0 else 0.0
+
+    lats = _metrics["latencies"]
+    avg_latency = (sum(lats) / len(lats)) if lats else 0.0
+
+    hallucinated = _metrics["hallucinated"]
+    hallucination_rate = (hallucinated / total) if total > 0 else 0.0
+
+    return {
+        "total_requests": int(total),
+        "cache_hits": int(hits),
+        "cache_hit_rate": float(cache_hit_rate),
+        "avg_latency_ms": float(avg_latency),
+        "hallucination_rate": float(hallucination_rate),
+        "uptime_seconds": float(time.time() - UPTIME_START)
+    }
 
 # =========================
 # 🚀 Detection Endpoint
@@ -66,8 +102,19 @@ async def health_check():
 @app.post("/detect", response_model=DetectResponse)
 @limiter.limit("50/minute")
 async def detect_hallucination(request: Request, payload: DetectRequest):
-    try:
-        result = run_pipeline(payload.prompt, payload.response, payload.sampled_responses)
+    _metrics["total"] += 1
+    start_t = time.time()
+
+    cache_hash = hashlib.sha256(f"{payload.prompt}|{payload.response}".encode()).hexdigest()
+
+    if cache_hash in _cache:
+        _metrics["hits"] += 1
+        result = _cache[cache_hash]
+        latency = (time.time() - start_t) * 1000
+        _metrics["latencies"].append(latency)
+
+        if result["label"]:
+            _metrics["hallucinated"] += 1
 
         return DetectResponse(
             hallucination_score=result["score"],
@@ -83,12 +130,47 @@ async def detect_hallucination(request: Request, payload: DetectRequest):
                 )
                 for s in result["spans"]
             ],
-            component_scores=result["components"]
+            component_scores=result["components"],
+            cache_hit=True
         )
 
+    try:
+        result = await asyncio.wait_for(
+            run_pipeline_async(payload.prompt, payload.response, payload.sampled_responses),
+            timeout=30.0
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Pipeline execution timeout")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    if len(_cache) >= MAX_CACHE_SIZE:
+        _cache.pop(next(iter(_cache)))
+    _cache[cache_hash] = result
+
+    latency = (time.time() - start_t) * 1000
+    _metrics["latencies"].append(latency)
+
+    if result["label"]:
+        _metrics["hallucinated"] += 1
+
+    return DetectResponse(
+        hallucination_score=result["score"],
+        is_hallucinated=result["label"],
+        explanation=result["explanation"],
+        hallucination_pattern=result["pattern"],
+        flagged_spans=[
+            Span(
+                start=s["start"],
+                end=s["end"],
+                text=s["text"],
+                confidence=s["confidence"]
+            )
+            for s in result["spans"]
+        ],
+        component_scores=result["components"],
+        cache_hit=False
+    )
 
 # =========================
 # ▶️ Run Server

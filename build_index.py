@@ -1,84 +1,101 @@
+import argparse
 import os
 import pickle
-import numpy as np
-import faiss
 
+import faiss
+import numpy as np
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 
-# -------------------------------
-# STEP 0: Setup
-# -------------------------------
-print("🚀 Starting FAISS index build...")
 
-# Create models folder if not exists
-os.makedirs("models", exist_ok=True)
+def chunk_text(text, size=200, stride=100):
+    words = text.split()
+    chunks = []
 
-# -------------------------------
-# STEP 1: Load Dataset
-# -------------------------------
-print("📥 Loading dataset...")
+    if not words:
+        return chunks
 
-dataset = load_dataset("ag_news", split="train[:2000]")
+    if len(words) <= size:
+        return [" ".join(words)]
 
-# Extract text
-documents = [x["text"] for x in dataset]
+    for i in range(0, len(words), stride):
+        chunk = " ".join(words[i:i + size])
+        chunks.append(chunk)
+        if i + size >= len(words):
+            break
 
-print(f"✅ Loaded {len(documents)} documents")
+    return chunks
 
-# -------------------------------
-# STEP 2: Load Embedding Model
-# -------------------------------
-print("🧠 Loading embedding model...")
+def main():
+    parser = argparse.ArgumentParser(description="Build FAISS Index for RUC-Detect")
+    parser.add_argument("--sample", type=int, default=50000, help="Number of documents to sample")
+    args = parser.parse_args()
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+    print("🚀 Starting FAISS index build...")
+    os.makedirs("models", exist_ok=True)
 
-# -------------------------------
-# STEP 3: Generate Embeddings
-# -------------------------------
-print("⚡ Generating embeddings...")
+    print(f"📥 Loading dataset (wikipedia 20220301.en), format: train[:{args.sample}]...")
+    dataset = load_dataset("wikipedia", "20220301.en", split=f"train[:{args.sample}]")
 
-embeddings = model.encode(
-    documents,
-    show_progress_bar=True
-)
+    documents = []
+    metadata = []
 
-# Convert to numpy float32 (IMPORTANT for FAISS)
-embeddings = np.array(embeddings).astype("float32")
+    print("✂️ Chunking documents...")
+    for doc in dataset:
+        title = doc.get("title", "Unknown")
+        text = doc.get("text", "")
+        chunks = chunk_text(text, size=200, stride=100)
 
-print(f"✅ Embeddings shape: {embeddings.shape}")
+        for idx, chunk in enumerate(chunks):
+            documents.append(chunk)
+            metadata.append({
+                "title": title,
+                "chunk_idx": idx
+            })
 
-# -------------------------------
-# STEP 4: Build FAISS Index
-# -------------------------------
-print("📦 Building FAISS index...")
+    print(f"✅ Created {len(documents)} overlapping chunks from {len(dataset)} articles")
 
-dimension = embeddings.shape[1]
+    print("🧠 Loading embedding model...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
-index = faiss.IndexFlatL2(dimension)
-index.add(embeddings)
+    print("⚡ Generating embeddings with batch_size=256...")
+    embeddings = model.encode(
+        documents,
+        batch_size=256,
+        show_progress_bar=True
+    )
+    embeddings = np.array(embeddings).astype("float32")
 
-print(f"✅ FAISS index built with {index.ntotal} vectors")
+    print(f"✅ Embeddings shape: {embeddings.shape}")
 
-# -------------------------------
-# STEP 5: Save Index
-# -------------------------------
-index_path = "models/faiss.index"
-faiss.write_index(index, index_path)
+    print("📦 Building FAISS IndexIVFFlat...")
+    dimension = embeddings.shape[1]
 
-print(f"💾 Saved FAISS index to {index_path}")
+    # Constructing quantizer and IVFFlat
+    quantizer = faiss.IndexFlatL2(dimension)
+    index = faiss.IndexIVFFlat(quantizer, dimension, 100)
 
-# -------------------------------
-# STEP 6: Save Documents
-# -------------------------------
-docs_path = "models/docs.pkl"
+    print("🎓 Training FAISS index...")
+    index.train(embeddings)
+    index.add(embeddings)
 
-with open(docs_path, "wb") as f:
-    pickle.dump(documents, f)
+    print(f"✅ FAISS index built and populated with {index.ntotal} vectors")
 
-print(f"💾 Saved documents to {docs_path}")
+    index_path = "models/faiss.index"
+    faiss.write_index(index, index_path)
+    print(f"💾 Saved FAISS index to {index_path}")
 
-# -------------------------------
-# DONE
-# -------------------------------
-print("🎉 SUCCESS: Index building completed!")
+    docs_path = "models/docs.pkl"
+    with open(docs_path, "wb") as f:
+        pickle.dump(documents, f)
+    print(f"💾 Saved {len(documents)} document chunks to {docs_path}")
+
+    meta_path = "models/meta.pkl"
+    with open(meta_path, "wb") as f:
+        pickle.dump(metadata, f)
+    print(f"💾 Saved chunk metadata to {meta_path}")
+
+    print("🎉 SUCCESS: Index building completed!")
+
+if __name__ == "__main__":
+    main()

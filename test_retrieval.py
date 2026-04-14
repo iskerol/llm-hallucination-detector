@@ -1,7 +1,7 @@
-import faiss
 import pickle
+
+import faiss
 from sentence_transformers import SentenceTransformer
-import numpy as np
 
 print("🔍 Loading index...")
 
@@ -24,10 +24,10 @@ print(f"\nQuery: {query}\n")
 q_emb = model.encode([query]).astype("float32")
 
 # Search
-D, I = index.search(q_emb, k=3)
+distances, indices = index.search(q_emb, k=3)
 
 print("📄 Top Retrieved Documents:\n")
 
-for i in I[0]:
+for i in indices[0]:
     print(docs[i][:300])
     print("-" * 60)

@@ -1,12 +1,20 @@
-from sentence_transformers import SentenceTransformer
-import numpy as np
-import faiss
+import asyncio
 import pickle
-import spacy
+import time
+from concurrent.futures import ThreadPoolExecutor
 
-from utils.nli import get_nli_score
+import faiss
+import numpy as np
+import spacy
+import structlog
+from sentence_transformers import SentenceTransformer
+
+from utils.nli import batch_nli_scores
 from utils.selfcheck import selfcheck_nli
 from utils.taxonomy import classify_pattern
+
+logger = structlog.get_logger()
+executor = ThreadPoolExecutor(max_workers=4)
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 nlp = spacy.load("en_core_web_sm")
@@ -16,19 +24,23 @@ index = faiss.read_index("models/faiss.index")
 with open("models/docs.pkl", "rb") as f:
     documents = pickle.load(f)
 
+with open("models/meta.pkl", "rb") as f:
+    meta = pickle.load(f)
+
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def run_pipeline(prompt, response, sampled_responses=None):
+    start_time = time.time()
 
     response_embedding = model.encode([response]).astype("float32")
     response_embedding = response_embedding / np.linalg.norm(
         response_embedding, axis=1, keepdims=True
     )
 
-    D, I = index.search(response_embedding, k=5)
+    distances, indices = index.search(response_embedding, k=5)
 
-    top_docs = I[0]
+    top_docs = indices[0]
 
     retrieved_docs_text = [documents[idx] for idx in top_docs]
     doc_embeddings = model.encode(retrieved_docs_text).astype("float32")
@@ -48,11 +60,16 @@ def run_pipeline(prompt, response, sampled_responses=None):
 
     # ================= NLI (FactCC idea) =================
     nli_scores = []
+    pairs = []
 
     for sent in sentences:
         for idx in top_docs:
-            label, score = get_nli_score(documents[idx], sent)
+            context = f"Title: {meta[idx]['title']}\n\n{documents[idx]}"
+            pairs.append((context, sent))
 
+    if pairs:
+        batch_results = batch_nli_scores(pairs, batch_size=16)
+        for label, score in batch_results:
             if label == "ENTAILMENT":
                 nli_scores.append(score)
             elif label == "CONTRADICTION":
@@ -105,12 +122,24 @@ def run_pipeline(prompt, response, sampled_responses=None):
 
         if avg < 0.5:
             start = response.find(sent)
+            if start == -1:
+                continue
+
             flagged_spans.append({
                 "start": start,
                 "end": start + len(sent),
                 "text": sent,
                 "confidence": float(1 - avg)
             })
+
+    latency_ms = (time.time() - start_time) * 1000
+
+    logger.info("pipeline_complete",
+                event="pipeline_complete",
+                score=float(final_score),
+                label=bool(label),
+                pattern=pattern,
+                latency_ms=latency_ms)
 
     return {
         "score": float(final_score),
@@ -124,3 +153,13 @@ def run_pipeline(prompt, response, sampled_responses=None):
             "selfcheck_score": float(selfcheck_score)
         }
     }
+
+async def run_pipeline_async(prompt, response, sampled_responses=None):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        executor,
+        run_pipeline,
+        prompt,
+        response,
+        sampled_responses
+    )

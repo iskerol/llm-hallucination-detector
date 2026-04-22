@@ -1,0 +1,171 @@
+import logging
+import nltk
+from typing import List, Dict
+import numpy as np
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Ensure tokenizers are available for punctuation splits
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+
+class RetrievalSimilarityScorer:
+    """Signal A: Evaluates raw semantic density metrics across local retrieval pools."""
+    def __init__(self, embedder):
+        self.embedder = embedder
+
+    def score(self, response: str, retrieved_passages: List[Dict]) -> Dict:
+        """Score based on max sentence similarity to retrieved passages."""
+        if not response or not retrieved_passages:
+            return {"similarity_score": 0.0, "top_passage": "", "top_score": 0.0, "coverage": 0.0}
+            
+        sentences = nltk.sent_tokenize(response)
+        if not sentences:
+            return {"similarity_score": 0.0, "top_passage": "", "top_score": 0.0, "coverage": 0.0}
+            
+        s_embs = self.embedder.encode(sentences, show_progress=False)
+        p_texts = [p["text"] for p in retrieved_passages if p.get("text")]
+        
+        if not p_texts:
+            return {"similarity_score": 0.0, "top_passage": "", "top_score": 0.0, "coverage": 0.0}
+            
+        p_embs = self.embedder.encode(p_texts, show_progress=False)
+        
+        s_embs = self.embedder.normalize(s_embs)
+        p_embs = self.embedder.normalize(p_embs)
+        
+        # Computing the Maximum inner-products (cosine distances)
+        sim_matrix = np.dot(s_embs, p_embs.T) # shape: (n_Sentences, n_Passages)
+        
+        max_sims = np.max(sim_matrix, axis=1)
+        best_passage_idx = np.argmax(np.max(sim_matrix, axis=0)) if len(p_embs) > 0 else 0
+        
+        avg_sim = float(np.mean(max_sims))
+        coverage = float(np.mean(max_sims > 0.6))
+        
+        top_passage = p_texts[int(best_passage_idx)]
+        top_score = float(np.max(sim_matrix)) if sim_matrix.size > 0 else 0.0
+        
+        return {
+            "similarity_score": avg_sim,
+            "top_passage": top_passage,
+            "top_score": top_score,
+            "coverage": coverage
+        }
+
+
+class NLIEntailmentScorer:
+    """Signal B: Evaluates structured natural language inference properties bounded internally."""
+    def __init__(self, model_name: str = "cross-encoder/nli-deberta-v3-base"):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading NLI model {model_name} onto {self.device}")
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
+        self.model.eval()
+
+    def score(self, response: str, context: str) -> Dict:
+        """Compute NLI scores for the response against provided contextual ground truths."""
+        if not response or not context:
+            return {"entailment_prob": 0.0, "contradiction_prob": 0.0, "neutral_prob": 1.0, "nli_label": "neutral"}
+            
+        sentences = nltk.sent_tokenize(response)
+        if not sentences:
+            return {"entailment_prob": 0.0, "contradiction_prob": 0.0, "neutral_prob": 1.0, "nli_label": "neutral"}
+            
+        pairs = [[context, s] for s in sentences]
+        all_probs = []
+        batch_size = 16
+        
+        with torch.no_grad():
+            for i in range(0, len(pairs), batch_size):
+                batch_pairs = pairs[i:i+batch_size]
+                features = self.tokenizer(batch_pairs, padding=True, truncation=True, return_tensors="pt")
+                features = {k: v.to(self.device) for k, v in features.items()}
+                logits = self.model(**features).logits
+                probs = torch.softmax(logits, dim=1).cpu().numpy()
+                all_probs.extend(probs)
+                
+        avg_probs = np.mean(np.array(all_probs), axis=0) 
+        
+        id2label = self.model.config.id2label
+        lbl2id = {v.lower(): k for k, v in id2label.items()}
+        
+        # Cross encoder NLI deberta defaults
+        c_id = lbl2id.get("contradiction", 0)
+        e_id = lbl2id.get("entailment", 1)
+        n_id = lbl2id.get("neutral", 2)
+        
+        c_prob = float(avg_probs[c_id])
+        e_prob = float(avg_probs[e_id])
+        n_prob = float(avg_probs[n_id])
+        
+        label_id = int(np.argmax(avg_probs))
+        nli_label = id2label.get(label_id, "neutral").lower()
+        
+        return {
+            "entailment_prob": e_prob,
+            "contradiction_prob": c_prob,
+            "neutral_prob": n_prob,
+            "nli_label": nli_label
+        }
+
+
+class SemanticEntropyScorer:
+    """Signal C: Checks for variance (semantic uncertainty) generated by output loops."""
+    def __init__(self, embedder):
+        self.embedder = embedder
+
+    def score(self, responses: List[str]) -> Dict:
+        """Calculate semantic entropy utilizing grouping patterns off an N-sample tensor."""
+        if not responses or len(responses) <= 1:
+            return {"semantic_entropy": 0.0, "n_clusters": 0, "cluster_sizes": [], "entropy_label": "low"}
+            
+        N = len(responses)
+        embs = self.embedder.encode(responses, show_progress=False)
+        embs = self.embedder.normalize(embs)
+        
+        sim_matrix = np.dot(embs, embs.T)
+        
+        # Greedy geometric clustering grouping > 0.85 bounds
+        unassigned = set(range(N))
+        clusters = []
+        
+        while unassigned:
+            i = unassigned.pop()
+            cluster = [i]
+            to_remove = set()
+            for j in unassigned:
+                if sim_matrix[i, j] > 0.85:
+                    cluster.append(j)
+                    to_remove.add(j)
+            unassigned -= to_remove
+            clusters.append(cluster)
+            
+        cluster_sizes = [len(c) for c in clusters]
+        n_clusters = len(clusters)
+        
+        entropy = 0.0
+        for size in cluster_sizes:
+            p_c = size / N
+            entropy -= p_c * np.log(p_c)
+            
+        label = "low"
+        if entropy > 1.5:
+            label = "high"
+        elif entropy >= 0.5:
+            label = "medium"
+            
+        return {
+            "semantic_entropy": float(entropy),
+            "n_clusters": int(n_clusters),
+            "cluster_sizes": cluster_sizes,
+            "entropy_label": label
+        }

@@ -1,28 +1,27 @@
-.PHONY: install index eval eval-quick api ui lint docker-up docker-down
+.PHONY: install test lint run-api run-ui build-index evaluate paper-figures
 
 install:
-	bash setup.sh
+	pip install -r requirements.txt
+	pip install -e .
 
-index:
-	python build_index.py --sample 50000
-
-eval:
-	python evaluate.py
-
-eval-quick:
-	python evaluate.py --quick
-
-api:
-	uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-
-ui:
-	python app.py
+test:
+	pytest tests/
 
 lint:
+	black .
 	ruff check .
 
-docker-up:
-	docker-compose up --build -d
+run-api:
+	uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
-docker-down:
-	docker-compose down
+run-ui:
+	gradio ui/app.py
+
+build-index:
+	python knowledge_base/builder.py
+
+evaluate:
+	python evaluation/benchmarks.py
+
+paper-figures:
+	python experiments/ablation.py

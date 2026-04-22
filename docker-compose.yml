@@ -1,31 +1,50 @@
-version: "3.8"
+version: '3.8'
 
 services:
   api:
     build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     volumes:
-      - ./models:/app/models
-    networks:
-      - ruc-detect
-
-  gradio:
-    image: python:3.10-slim
-    working_dir: /app
-    volumes:
-      - .:/app
-    command: >
-      bash -c "pip install gradio requests && python app.py"
+      - ./data:/app/data
+      - ./kb:/app/kb
+    env_file:
+      - .env
     environment:
-      - SPACE_API_URL=http://api:8000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - mlflow
+    networks:
+      - raid_net
+
+  ui:
+    build: .
+    command: python ui/app.py
     ports:
       - "7860:7860"
+    volumes:
+      - ./data:/app/data
+      - ./kb:/app/kb
+    env_file:
+      - .env
+    environment:
+      - API_URL=http://api:8000
     depends_on:
       - api
     networks:
-      - ruc-detect
+      - raid_net
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    command: mlflow server --host 0.0.0.0 --port 5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+    networks:
+      - raid_net
 
 networks:
-  ruc-detect:
+  raid_net:
     driver: bridge

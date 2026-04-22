@@ -1,12 +1,27 @@
-[tool.ruff]
-line-length = 100
-target-version = "py310"
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-[tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]
-exclude = [
-    "scratch_*.py",
-    "models/",
-    "results/"
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ['py39', 'py310']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.github
+  | \.ruff_cache
+  | \.venv
+  | _build
+  | build
+  | dist
+  | __pycache__
+)/
+'''

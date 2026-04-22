@@ -1,28 +1,31 @@
-FROM python:3.10-slim AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl && rm -rf /var/lib/apt/lists/*
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
 FROM python:3.10-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# Enforce non-interactive execution constraints
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN useradd -m -u 1000 appuser
-USER appuser
+# Update system topologies enabling basic FAISS C++ mapping dependencies bounds
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --chown=appuser:appuser --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Copy requirement boundaries optimizing Docker layers caching loops
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=appuser:appuser . .
+# Transport core structures arrays
+COPY . .
 
-HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1
+# Initialize application space topologies locally natively
+RUN pip install -e .
 
 EXPOSE 8000
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--timeout-keep-alive", "30"]
+EXPOSE 7860
+
+# Background execution multiplex shell block arrays
+RUN echo '#!/bin/bash\nuvicorn api.main:app --host 0.0.0.0 --port 8000 & \npython ui/app.py \nwait -n' > /start.sh
+RUN chmod +x /start.sh
+
+CMD ["/start.sh"]

@@ -1,41 +1,48 @@
-name: CI/CD Pipeline
+name: RAID CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
-  lint:
+  lint-and-test:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: pip install ruff
-      - name: Run Ruff
-        run: ruff check .
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run Evaluate
-        run: python evaluate.py --quick
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Docker Image
-        run: docker build -t ruc-detect-api .
+    - name: Checkout Code Repository Matrices
+      uses: actions/checkout@v3
+    
+    - name: Setup Python Ecosystem Bindings
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+        cache: 'pip'
+        
+    - name: Install System Internal Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgomp1
+        python -m pip install --upgrade pip
+        pip install black flake8 pytest pytest-cov
+        pip install -r requirements.txt
+        
+    - name: Ensure Local Package Installs
+      run: pip install -e .
+        
+    - name: Lint Constraints - Black Validator
+      run: black --check .
+      
+    - name: Lint Constraints - Flake8 Errors Check
+      run: flake8 . --max-line-length=120 --ignore=E501,E402,W503
+      
+    - name: Pytest Unit Mappings with Code Coverage Validation Array
+      run: |
+        pytest tests/ --cov=detection --cov=knowledge_base --cov=api --cov-report=xml --cov-fail-under=70
+      
+    - name: Export Upload Coverage Maps cleanly
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false

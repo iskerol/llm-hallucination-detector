@@ -1,4 +1,4 @@
-faiss-cpu==1.7.4
+faiss-cpu==1.8.0
 fastapi==0.111.0
 uvicorn
 gradio==4.36.0
@@ -14,7 +14,6 @@ tqdm
 pydantic==2.7.0
 pydantic-settings
 python-dotenv
-mlflow==2.13.0
 pytest==8.2.0
 httpx
 rouge-score

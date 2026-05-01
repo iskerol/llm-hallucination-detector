@@ -1,0 +1,6 @@
+{
+    "num_docs": 1,
+    "num_chunks": 1,
+    "index_type": "IndexFlatIP",
+    "dimension": 768
+}

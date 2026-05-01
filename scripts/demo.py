@@ -3,6 +3,9 @@ import sys
 import argparse
 from rich.console import Console
 
+# Add parent directory to sys.path so we can import from config, knowledge_base, etc.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 def main():
     parser = argparse.ArgumentParser(description="RAID CLI Demo Toolkit")
     parser.add_argument("--query", required=True, help="Input textual query maps.")
@@ -50,7 +53,7 @@ def main():
     
     console.print("[bold]Top Retrievers:[/bold]")
     for p in res.get("supporting_passages", [])[:3]:
-        console.print(f"  - \[{p.get('score', 0):.2f}] {p.get('text', '')}")
+        console.print(f"  - \\[{p.get('score', 0):.2f}] {p.get('text', '')}")
         
     console.print(f"\n[bold]Highlighted Span Markup:[/bold]\n{res.get('highlighted_html', '')}\n")
 

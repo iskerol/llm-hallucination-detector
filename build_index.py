@@ -1,14 +1,15 @@
-import argparse
 import os
 import pickle
 
 import faiss
 import numpy as np
-from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 
 
-def chunk_text(text, size=200, stride=100):
+# -----------------------------
+# Helper: Chunk text
+# -----------------------------
+def chunk_text(text, size=100, stride=50):
     words = text.split()
     chunks = []
 
@@ -26,25 +27,49 @@ def chunk_text(text, size=200, stride=100):
 
     return chunks
 
-def main():
-    parser = argparse.ArgumentParser(description="Build FAISS Index for RUC-Detect")
-    parser.add_argument("--sample", type=int, default=50000, help="Number of documents to sample")
-    args = parser.parse_args()
 
+# -----------------------------
+# Main
+# -----------------------------
+def main():
     print("🚀 Starting FAISS index build...")
+
     os.makedirs("models", exist_ok=True)
 
-    print(f"📥 Loading dataset (wikipedia 20220301.en), format: train[:{args.sample}]...")
-    dataset = load_dataset("wikipedia", "20220301.en", split=f"train[:{args.sample}]")
+    # ✅ LOCAL DATASET (No internet needed)
+    dataset = [
+        {
+            "title": "Gravity",
+            "text": "Gravity was discovered by Isaac Newton. It is a force that attracts objects toward each other."
+        },
+        {
+            "title": "Python Programming",
+            "text": "Python is a programming language created by Guido van Rossum. It is widely used in artificial intelligence and data science."
+        },
+        {
+            "title": "Earth",
+            "text": "Earth is the third planet from the Sun. It supports life and has water and atmosphere."
+        },
+        {
+            "title": "Artificial Intelligence",
+            "text": "Artificial Intelligence is the simulation of human intelligence in machines that are programmed to think and learn."
+        },
+        {
+            "title": "Machine Learning",
+            "text": "Machine learning is a subset of AI that allows systems to learn and improve from experience without being explicitly programmed."
+        }
+    ]
 
     documents = []
     metadata = []
 
     print("✂️ Chunking documents...")
+
     for doc in dataset:
-        title = doc.get("title", "Unknown")
-        text = doc.get("text", "")
-        chunks = chunk_text(text, size=200, stride=100)
+        title = doc["title"]
+        text = doc["text"]
+
+        chunks = chunk_text(text)
 
         for idx, chunk in enumerate(chunks):
             documents.append(chunk)
@@ -53,49 +78,50 @@ def main():
                 "chunk_idx": idx
             })
 
-    print(f"✅ Created {len(documents)} overlapping chunks from {len(dataset)} articles")
+    print(f"✅ Created {len(documents)} chunks")
 
+    # -----------------------------
+    # Embedding
+    # -----------------------------
     print("🧠 Loading embedding model...")
     model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    print("⚡ Generating embeddings with batch_size=256...")
+    print("⚡ Generating embeddings...")
     embeddings = model.encode(
         documents,
-        batch_size=256,
+        batch_size=32,
         show_progress_bar=True
     )
+
     embeddings = np.array(embeddings).astype("float32")
+    print(f"✅ Embedding shape: {embeddings.shape}")
 
-    print(f"✅ Embeddings shape: {embeddings.shape}")
+    # -----------------------------
+    # FAISS Index
+    # -----------------------------
+    print("📦 Building FAISS index...")
 
-    print("📦 Building FAISS IndexIVFFlat...")
     dimension = embeddings.shape[1]
 
-    # Constructing quantizer and IVFFlat
-    quantizer = faiss.IndexFlatL2(dimension)
-    index = faiss.IndexIVFFlat(quantizer, dimension, 100)
-
-    print("🎓 Training FAISS index...")
-    index.train(embeddings)
+    index = faiss.IndexFlatL2(dimension)
     index.add(embeddings)
 
-    print(f"✅ FAISS index built and populated with {index.ntotal} vectors")
+    print(f"✅ Index contains {index.ntotal} vectors")
 
-    index_path = "models/faiss.index"
-    faiss.write_index(index, index_path)
-    print(f"💾 Saved FAISS index to {index_path}")
+    # -----------------------------
+    # Save files
+    # -----------------------------
+    faiss.write_index(index, "models/faiss.index")
 
-    docs_path = "models/docs.pkl"
-    with open(docs_path, "wb") as f:
+    with open("models/docs.pkl", "wb") as f:
         pickle.dump(documents, f)
-    print(f"💾 Saved {len(documents)} document chunks to {docs_path}")
 
-    meta_path = "models/meta.pkl"
-    with open(meta_path, "wb") as f:
+    with open("models/meta.pkl", "wb") as f:
         pickle.dump(metadata, f)
-    print(f"💾 Saved chunk metadata to {meta_path}")
 
-    print("🎉 SUCCESS: Index building completed!")
+    print("💾 Saved all files in /models")
+    print("🎉 SUCCESS: Index built successfully!")
+
 
 if __name__ == "__main__":
     main()

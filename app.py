@@ -22,7 +22,7 @@ def get_color_map():
 def detect_hallucination(prompt, response, sampled_responses_text):
     try:
         payload = {
-            "prompt": prompt,
+            "query": prompt,
             "response": response
         }
 
@@ -39,17 +39,18 @@ def detect_hallucination(prompt, response, sampled_responses_text):
 
         data = res.json()
 
-        # Build highlighted spans safely overlapping ranges
-        spans = sorted(data.get("flagged_spans", []), key=lambda x: x["start"])
+        # Build highlighted spans from backend response
+        spans = data.get("spans", [])
         highlighted = []
         current_idx = 0
 
         for s in spans:
-            start, end, conf = s["start"], s["end"], s["confidence"]
+            start, end = s.get("start", 0), s.get("end", 0)
+            conf = s.get("confidence", 0.0)
 
             if start > current_idx:
                 highlighted.append((response[current_idx:start], None))
-            
+
             if end > current_idx:
                 actual_start = max(start, current_idx)
                 label = f"Score: {conf:.2f}"
@@ -62,15 +63,18 @@ def detect_hallucination(prompt, response, sampled_responses_text):
         if not highlighted:
             highlighted = [(response, None)]
 
-        comp_scores = data.get("component_scores", {})
+        # Map backend 'signals' to UI output fields
+        signals = data.get("signals", {})
+        is_hal = data.get("is_hallucinated", False)
+        explanation = f"Hallucination detected (score: {data.get('hallucination_score', 0):.3f})" if is_hal else "No significant hallucination detected."
 
         return (
             highlighted,
-            data["hallucination_score"],
-            data["explanation"],
-            comp_scores.get("retrieval_similarity", 0.0),
-            comp_scores.get("nli_score", 0.0),
-            comp_scores.get("selfcheck_score", 0.0),
+            data.get("hallucination_score", 0.0),
+            explanation,
+            signals.get("retrieval_similarity", 0.0),
+            signals.get("nli_entailment", 0.0),
+            signals.get("semantic_entropy", 0.0),
             data
         )
 

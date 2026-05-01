@@ -10,8 +10,6 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from concurrent.futures import ThreadPoolExecutor
 
-import mlflow
-
 from config import config
 from api.models import (
     DetectionRequest, DetectionResponse, 
@@ -53,14 +51,6 @@ async def startup_event():
     """Application bounds, configures environment paths, initializes NLP submodules into hot GPU memory blocks."""
     logger.info("Initializing Application Core Modules...")
     try:
-        if config.mlflow_tracking_uri:
-            mlflow.set_tracking_uri(config.mlflow_tracking_uri)
-            mlflow.set_experiment("hallucination-detector-api")
-            try:
-                mlflow.start_run(run_name="api_session")
-            except Exception as mlf_err:
-                logger.warning(f"MLFlow active run creation overridden: {mlf_err}")
-
         embedder = SentenceEmbedder(model_name=config.EMBED_MODEL)
         builder = KnowledgeBaseBuilder(embedder=embedder)
         
